@@ -1,0 +1,67 @@
+name: CI
+
+# Minimal CI for a single-file static surge app.
+# - validate: extract the inline `<script type="module">` from index.html and
+#   run `node --check` on it, then assert the surge SPA-fallback invariant
+#   (200.html byte-identical to index.html). No build step, no deps.
+# - deploy:   on push to main, publish the folder to surge.
+#
+# Required repo config to enable deploy (set once auth is provisioned):
+#   secret SURGE_TOKEN  -> a surge token (run `surge token`)
+#   var    SURGE_DOMAIN -> e.g. meet-transcriber-spa.surge.sh (falls back below)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Validate inline module JS (node --check)
+        run: |
+          node -e '
+            const fs = require("fs");
+            const html = fs.readFileSync("index.html", "utf8");
+            const re = /<script\b[^>]*type=["\x27]module["\x27][^>]*>([\s\S]*?)<\/script>/gi;
+            let m, i = 0;
+            while ((m = re.exec(html))) { fs.writeFileSync("._mod_" + i + ".mjs", m[1]); i++; }
+            if (i === 0) { console.error("No inline <script type=module> found in index.html"); process.exit(1); }
+            console.log("Extracted " + i + " inline module script(s)");
+          '
+          for f in ._mod_*.mjs; do echo "node --check $f"; node --check "$f"; done
+      - name: Surge SPA-fallback invariant (200.html == index.html)
+        run: |
+          if ! cmp -s index.html 200.html; then
+            echo "::error::200.html must be byte-identical to index.html (surge SPA fallback)"
+            exit 1
+          fi
+
+  deploy:
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Deploy to surge
+        env:
+          SURGE_TOKEN: ${{ secrets.SURGE_TOKEN }}
+          SURGE_DOMAIN: ${{ vars.SURGE_DOMAIN }}
+        run: |
+          if [ -z "$SURGE_TOKEN" ]; then
+            echo "::warning::SURGE_TOKEN not set — skipping deploy. Add it in repo secrets to enable deploy-on-merge."
+            exit 0
+          fi
+          npm i -g surge
+          surge ./ "${SURGE_DOMAIN:-meet-transcriber-spa.surge.sh}" --token "$SURGE_TOKEN"

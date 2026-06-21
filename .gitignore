@@ -2,3 +2,6 @@
 Thumbs.db
 *.log
 .surge*
+
+# CI temp extraction artifacts
+._mod_*.mjs
