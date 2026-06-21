@@ -1,0 +1,1162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Meet Transcriber — live tab capture, in-browser transcript + summary</title>
+<meta name="description" content="Capture a meeting tab's audio (Google Meet, Zoom web, any tab) or your mic and watch a live transcript build, with an auto summary and action items. Runs entirely in your browser with Whisper — no upload, no account, no API key, no Google login." />
+<meta property="og:title" content="Meet Transcriber" />
+<meta property="og:description" content="Live meeting transcription in your browser: share a tab's audio, get a streaming transcript, summary, and action items. No upload, no key, no OAuth. Powered by Whisper via WebGPU/WASM." />
+<style>
+  :root {
+    --bg: #0b1020;
+    --panel: #131a31;
+    --panel-2: #1b2545;
+    --line: #28335c;
+    --text: #e7ecff;
+    --muted: #9aa6cf;
+    --accent: #6c8cff;
+    --accent-2: #4ee0c0;
+    --danger: #ff6b81;
+    --ok: #4ee08a;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: radial-gradient(1200px 600px at 70% -10%, #1a2350 0%, var(--bg) 55%) fixed;
+    color: var(--text);
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 32px 20px 80px; }
+  header h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.02em; }
+  header p { color: var(--muted); margin: 0 0 4px; }
+  .badge { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--accent-2);
+           background: rgba(78,224,192,0.08); border: 1px solid rgba(78,224,192,0.25);
+           padding: 4px 10px; border-radius: 999px; margin-top: 10px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+          padding: 20px; margin-top: 22px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  select, button {
+    font: inherit; color: var(--text); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer;
+  }
+  select:focus, button:focus { outline: 2px solid var(--accent); }
+  .tabs { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+  .tab { padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel-2);
+         color: var(--muted); font-size: 14px; cursor: pointer; }
+  .tab.active { color: var(--text); border-color: var(--accent); background: rgba(108,140,255,0.12); }
+  .drop {
+    margin-top: 6px; border: 2px dashed var(--line); border-radius: var(--radius);
+    padding: 40px 20px; text-align: center; transition: 0.15s; cursor: pointer; background: rgba(108,140,255,0.03);
+  }
+  .drop.drag { border-color: var(--accent); background: rgba(108,140,255,0.1); }
+  .drop strong { color: var(--text); }
+  .drop span { color: var(--muted); font-size: 14px; }
+  .rec { margin-top: 6px; text-align: center; padding: 26px 20px; border: 1px solid var(--line); border-radius: var(--radius);
+         background: rgba(108,140,255,0.03); }
+  .rec-dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; background: var(--danger);
+             margin-right: 8px; vertical-align: middle; animation: pulse 1.1s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+  .rec-time { font-family: ui-monospace, monospace; font-size: 22px; margin: 8px 0; }
+  .btn-primary { background: linear-gradient(180deg, var(--accent), #4f6fe0); border-color: transparent; font-weight: 600; }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-rec { background: linear-gradient(180deg, var(--danger), #e0455c); border-color: transparent; font-weight: 600; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .status { margin-top: 16px; font-size: 14px; color: var(--muted); min-height: 20px; }
+  .bar { height: 8px; background: var(--panel-2); border-radius: 999px; overflow: hidden; margin-top: 8px; }
+  .bar > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width 0.2s; }
+  .out { margin-top: 18px; }
+  textarea {
+    width: 100%; min-height: 220px; resize: vertical; background: #0c1226; color: var(--text);
+    border: 1px solid var(--line); border-radius: 10px; padding: 14px; font-size: 15px; line-height: 1.6;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .out-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+  .pill { font-size: 12px; color: var(--muted); }
+  .err { color: var(--danger); }
+  .ok { color: var(--ok); }
+  .live-flag { color: var(--danger); font-weight: 600; }
+  footer { margin-top: 40px; color: var(--muted); font-size: 13px; text-align: center; }
+  a { color: var(--accent); }
+  .hide { display: none; }
+  .meta { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  audio { width: 100%; margin-top: 6px; }
+  .stats { display: flex; flex-wrap: wrap; gap: 18px; margin: 4px 0 14px; }
+  .stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; min-width: 92px; }
+  .stat b { display: block; font-size: 20px; }
+  .stat span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .summary { background: rgba(78,224,192,0.06); border: 1px solid rgba(78,224,192,0.22); border-radius: 10px; padding: 14px 16px; }
+  .summary h3 { margin: 0 0 8px; font-size: 15px; color: var(--accent-2); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .summary ul { margin: 0; padding-left: 20px; }
+  .summary li { margin-bottom: 6px; }
+  .summary a.cue { color: var(--accent-2); text-decoration: none; font-variant-numeric: tabular-nums; cursor: pointer; }
+  .summary a.cue:hover { text-decoration: underline; }
+  .summary .tag { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+                  padding: 2px 7px; border-radius: 999px; }
+  .tag-ai { color: #c7b3ff; background: rgba(150,120,255,0.14); border: 1px solid rgba(150,120,255,0.35); }
+  .tag-ext { color: var(--muted); background: var(--panel-2); border: 1px solid var(--line); }
+  .summary button.mini { font-size: 12px; padding: 5px 10px; margin-left: auto; }
+  #actionsBox { background: rgba(120,180,255,0.06); border-color: rgba(120,180,255,0.22); }
+  #actionsBox h3 { color: #9ec3ff; }
+  #decisionsBox { background: rgba(255,196,120,0.06); border-color: rgba(255,196,120,0.22); }
+  #decisionsBox h3 { color: #ffd28a; }
+  .segments { max-height: 320px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; background: #0c1226; padding: 6px; }
+  .seg { display: flex; gap: 12px; padding: 7px 9px; border-radius: 8px; cursor: pointer; }
+  .seg:hover { background: var(--panel-2); }
+  .seg.active { background: rgba(108,140,255,0.18); }
+  .seg time { color: var(--accent); font-family: ui-monospace, monospace; font-size: 12px; flex-shrink: 0; padding-top: 2px; }
+  .seg p { margin: 0; }
+  .sub { color: var(--muted); font-size: 13px; margin: 14px 0 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .titlein { width: 100%; font-size: 18px; font-weight: 600; background: #0c1226; color: var(--text);
+             border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin-top: 8px; }
+  .titlein:focus { outline: 2px solid var(--accent); }
+  .searchrow { display: flex; gap: 10px; align-items: center; margin: 16px 0 0; }
+  .searchrow input { flex: 1; background: #0c1226; color: var(--text); border: 1px solid var(--line);
+                     border-radius: 10px; padding: 9px 12px; font: inherit; }
+  .searchrow input:focus { outline: 2px solid var(--accent); }
+  .searchrow .count { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .seg mark { background: rgba(78,224,192,0.35); color: var(--text); border-radius: 3px; padding: 0 1px; }
+  .hist-list { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+  .hist-item { display: flex; gap: 10px; align-items: center; justify-content: space-between;
+               background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .hist-item .hi-main { min-width: 0; }
+  .hist-item .hi-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hist-item .hi-meta { font-size: 12px; color: var(--muted); }
+  .hist-item .hi-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .hist-item button { padding: 6px 10px; font-size: 13px; }
+  .btn-ghost { background: transparent; }
+  .btn-del { color: var(--danger); }
+  .src-grid { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .src-opt { padding: 9px 16px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel-2);
+             color: var(--muted); font-size: 14px; cursor: pointer; }
+  .src-opt.active { color: var(--text); border-color: var(--accent-2); background: rgba(78,224,192,0.12); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Meet Transcriber</h1>
+    <p>Capture a <strong>live meeting tab</strong> (Google Meet, Zoom on web, any tab), your microphone, or both — and watch a transcript build in real time, with a clickable timeline, auto summary, and action items.</p>
+    <p>Everything runs <strong>entirely in your browser</strong> with OpenAI Whisper. No upload, no account, no API key, <strong>no Google login</strong>.</p>
+    <span class="badge">● Live tab audio · No upload · No account · No API key · No OAuth · 100% private</span>
+  </header>
+
+  <div class="card">
+    <div class="controls">
+      <div class="field">
+        <label for="model">Model</label>
+        <select id="model">
+          <option value="Xenova/whisper-tiny">Tiny — fastest, best for live (~40 MB)</option>
+          <option value="Xenova/whisper-base" selected>Base — balanced (~80 MB)</option>
+          <option value="Xenova/whisper-small">Small — most accurate (~250 MB)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="lang">Language</label>
+        <select id="lang">
+          <option value="auto" selected>Auto-detect</option>
+          <option value="english">English</option>
+          <option value="portuguese">Português</option>
+          <option value="spanish">Español</option>
+          <option value="french">Français</option>
+          <option value="german">Deutsch</option>
+          <option value="italian">Italiano</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="task">Task</label>
+        <select id="task">
+          <option value="transcribe" selected>Transcribe (same language)</option>
+          <option value="translate">Translate → English</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="tabs" role="tablist">
+      <div class="tab active" id="tabLive" role="tab" tabindex="0">🔴 Live meeting</div>
+      <div class="tab" id="tabUpload" role="tab" tabindex="0">📁 Upload a file</div>
+    </div>
+
+    <!-- Live capture pane -->
+    <div id="paneLive" class="rec">
+      <div class="src-grid" id="srcGrid" role="group" aria-label="Audio source">
+        <div class="src-opt active" data-src="tab" tabindex="0">🖥️ Meeting tab audio</div>
+        <div class="src-opt" data-src="mic" tabindex="0">🎙️ Microphone</div>
+        <div class="src-opt" data-src="both" tabindex="0">🎙️+🖥️ Both (mixed)</div>
+      </div>
+      <p class="meta" id="liveHint"></p>
+      <div class="rec-time" id="liveTime">00:00</div>
+      <div class="row" style="justify-content:center;">
+        <button id="liveBtn" class="btn-rec">● Start live capture</button>
+      </div>
+      <p class="meta" id="liveSub" style="margin-top:12px;">The transcript appears below and grows as people talk. Audio is processed in ~20-second windows and is never uploaded or stored.</p>
+    </div>
+
+    <!-- Upload pane -->
+    <div id="paneUpload" class="hide">
+      <div id="drop" class="drop" tabindex="0" role="button" aria-label="Choose or drop an audio or video file">
+        <p><strong>Click to choose</strong> or drag &amp; drop a file here</p>
+        <span>mp3 · m4a · wav · ogg · webm · mp4 · mov — up to ~1 hour works well</span>
+      </div>
+      <input id="file" type="file" accept="audio/*,video/*" class="hide" />
+      <div id="fileMeta" class="meta"></div>
+    </div>
+
+    <div class="row" id="runRow" style="margin-top:16px;" hidden>
+      <button id="run" class="btn-primary" disabled>Transcribe</button>
+      <span class="pill" id="hwNote"></span>
+    </div>
+    <div class="row" id="hwRow" style="margin-top:16px;">
+      <span class="pill" id="hwNote2"></span>
+    </div>
+
+    <div class="status" id="status"></div>
+    <div class="bar hide" id="barWrap"><i id="bar"></i></div>
+  </div>
+
+  <div class="card hide" id="histCard">
+    <div class="row" style="justify-content:space-between;">
+      <strong>Recent meetings</strong>
+      <button id="histClear" class="btn-ghost" style="font-size:13px; padding:6px 10px;">Clear all</button>
+    </div>
+    <p class="meta">Saved on this device — transcript + timeline only, audio is never stored. Click Open to reload one.</p>
+    <div class="hist-list" id="histList"></div>
+  </div>
+
+  <div class="card out hide" id="outCard">
+    <div class="row" style="justify-content:space-between;">
+      <strong id="outHeading">Result</strong>
+      <span class="pill" id="elapsed"></span>
+    </div>
+    <input id="title" class="titlein" placeholder="Untitled meeting" aria-label="Meeting title" />
+
+    <audio id="player" controls class="hide"></audio>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="summary hide" id="summaryBox">
+      <h3>📋 Meeting summary — key points
+        <span class="tag tag-ext" id="summaryTag">extractive</span>
+        <button class="mini btn-primary" id="aiSummarize" title="Generate an abstractive summary with a small in-browser LLM (WebGPU recommended)">✨ AI summary</button>
+      </h3>
+      <ul id="summaryList"></ul>
+    </div>
+
+    <div class="summary hide" id="actionsBox">
+      <h3>✅ Action items</h3>
+      <ul id="actionsList"></ul>
+    </div>
+
+    <div class="summary hide" id="decisionsBox">
+      <h3>🎯 Decisions</h3>
+      <ul id="decisionsList"></ul>
+    </div>
+
+    <div class="searchrow">
+      <input id="segSearch" type="search" placeholder="🔍 Search transcript…" aria-label="Search transcript" />
+      <span class="count" id="segCount"></span>
+    </div>
+    <div class="sub">Timeline — click a line to jump</div>
+    <div class="segments hide" id="segments"></div>
+
+    <div class="sub">Full transcript</div>
+    <textarea id="transcript" spellcheck="false" placeholder="Transcript will appear here…"></textarea>
+    <div class="out-actions">
+      <button id="copy">Copy</button>
+      <button id="dlTxt">.txt</button>
+      <button id="dlMd">.md (summary)</button>
+      <button id="dlSrt">.srt</button>
+      <button id="dlVtt">.vtt</button>
+    </div>
+  </div>
+
+  <footer>
+    Built by the Spanol Corps engineering team · v2a — live tab capture + streaming transcription · Powered by
+    <a href="https://github.com/huggingface/transformers.js" target="_blank" rel="noopener">🤗 Transformers.js</a>
+    &amp; Whisper · Runs on WebGPU when available, WASM otherwise.
+  </footer>
+</div>
+
+<script type="module">
+import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1";
+
+// Cache models in the browser; allow remote download from the HF hub.
+env.allowLocalModels = false;
+
+const RATE = 16000;          // Whisper expects 16 kHz mono
+const WINDOW_SEC = 20;       // streaming window length
+const WINDOW = WINDOW_SEC * RATE;
+const MAX_BUFFER_SEC = 90;   // hard cap on un-transcribed backlog (CPU fell behind)
+
+const $ = (id) => document.getElementById(id);
+const drop = $("drop"), fileInput = $("file"), fileMeta = $("fileMeta");
+const runBtn = $("run"), runRow = $("runRow"), statusEl = $("status"), barWrap = $("barWrap"), bar = $("bar");
+const outCard = $("outCard"), outHeading = $("outHeading"), transcriptEl = $("transcript"), elapsedEl = $("elapsed");
+const hwNote = $("hwNote"), hwNote2 = $("hwNote2");
+const player = $("player"), statsEl = $("stats"), segmentsEl = $("segments");
+const summaryBox = $("summaryBox"), summaryList = $("summaryList"), summaryTag = $("summaryTag"), aiBtn = $("aiSummarize");
+const actionsBox = $("actionsBox"), actionsList = $("actionsList");
+const decisionsBox = $("decisionsBox"), decisionsList = $("decisionsList");
+const titleEl = $("title"), segSearch = $("segSearch"), segCount = $("segCount");
+const histCard = $("histCard"), histList = $("histList");
+
+let selectedFile = null;     // File or Blob to transcribe (upload path)
+let mediaUrl = null;         // object URL for the audio player
+let transcriber = null;
+let loadedModelKey = null;
+let chunks = [];
+let audioSeconds = 0;
+let currentId = null;        // id of the session currently shown (for save/update)
+let isLiveSession = false;   // result currently shown came from live capture
+
+// ---- Restore saved settings ----
+for (const key of ["model", "lang", "task"]) {
+  const saved = localStorage.getItem("mt_" + key);
+  if (saved) { const el = $(key); if (el && [...el.options].some(o => o.value === saved)) el.value = saved; }
+  $(key).addEventListener("change", () => localStorage.setItem("mt_" + key, $(key).value));
+}
+renderHistory();
+
+// Detect WebGPU for a faster path.
+const hasWebGPU = typeof navigator !== "undefined" && "gpu" in navigator;
+const hwText = hasWebGPU ? "WebGPU detected — fast mode" : "Using WASM (CPU) — tip: pick the Tiny model for live capture";
+hwNote.textContent = hwText;
+hwNote2.textContent = hwText;
+
+// getDisplayMedia is required for tab/system audio.
+const hasDisplayMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+
+function setStatus(msg, cls) {
+  statusEl.className = "status" + (cls ? " " + cls : "");
+  statusEl.textContent = msg;
+}
+function setProgress(pct) {
+  if (pct == null) { barWrap.classList.add("hide"); return; }
+  barWrap.classList.remove("hide");
+  bar.style.width = Math.max(0, Math.min(100, pct)) + "%";
+}
+
+// ---- Tabs: live vs upload ----
+const tabLive = $("tabLive"), tabUpload = $("tabUpload");
+const paneLive = $("paneLive"), paneUpload = $("paneUpload");
+function selectTab(which) {
+  const live = which === "live";
+  tabLive.classList.toggle("active", live);
+  tabUpload.classList.toggle("active", !live);
+  paneLive.classList.toggle("hide", !live);
+  paneUpload.classList.toggle("hide", live);
+  runRow.hidden = live;          // "Transcribe" button only applies to uploads
+  $("hwRow").hidden = !live;
+}
+tabLive.addEventListener("click", () => selectTab("live"));
+tabUpload.addEventListener("click", () => selectTab("upload"));
+[tabLive, tabUpload].forEach(t => t.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); t.click(); } }));
+
+// ---- Live source selector (tab / mic / both) ----
+let liveSource = "tab";
+const srcGrid = $("srcGrid"), liveHint = $("liveHint");
+const SRC_HINTS = {
+  tab: "Click start, then pick the Google Meet (or any) tab and enable “Share tab audio” in the picker. Best for capturing everyone in the call.",
+  mic: "Click start and allow microphone access. Captures what your mic hears (your voice and the room).",
+  both: "Captures your microphone and a shared tab's audio mixed together. You'll be asked for both permissions.",
+};
+function selectSource(src) {
+  liveSource = src;
+  srcGrid.querySelectorAll(".src-opt").forEach(o => o.classList.toggle("active", o.dataset.src === src));
+  let hint = SRC_HINTS[src];
+  if ((src === "tab" || src === "both") && !hasDisplayMedia) {
+    hint += " ⚠️ This browser doesn't support tab capture — use Chrome or Edge on desktop.";
+  }
+  liveHint.textContent = hint;
+}
+srcGrid.querySelectorAll(".src-opt").forEach(o => {
+  o.addEventListener("click", () => selectSource(o.dataset.src));
+  o.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectSource(o.dataset.src); } });
+});
+selectSource("tab");
+
+// ---- File selection (upload path) ----
+drop.addEventListener("click", () => fileInput.click());
+drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") fileInput.click(); });
+["dragenter", "dragover"].forEach((ev) =>
+  drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("drag"); })
+);
+["dragleave", "drop"].forEach((ev) =>
+  drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("drag"); })
+);
+drop.addEventListener("drop", (e) => {
+  if (e.dataTransfer.files && e.dataTransfer.files[0]) pickFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener("change", () => { if (fileInput.files[0]) pickFile(fileInput.files[0]); });
+
+function pickFile(f) {
+  selectedFile = f;
+  if (mediaUrl) URL.revokeObjectURL(mediaUrl);
+  mediaUrl = URL.createObjectURL(f);
+  const mb = (f.size / 1024 / 1024).toFixed(1);
+  const name = f.name || "recording.webm";
+  fileMeta.textContent = `Selected: ${name} (${mb} MB)`;
+  runBtn.disabled = false;
+  setStatus("");
+}
+
+// ---- Decode + resample a whole file to 16 kHz mono Float32 (upload path) ----
+async function fileToAudio(file) {
+  const arrayBuf = await file.arrayBuffer();
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const tmpCtx = new AC();
+  const decoded = await tmpCtx.decodeAudioData(arrayBuf.slice(0));
+  tmpCtx.close();
+
+  const offline = new OfflineAudioContext(1, Math.ceil(decoded.duration * RATE), RATE);
+  const src = offline.createBufferSource();
+  src.buffer = decoded;
+  src.connect(offline.destination);
+  src.start(0);
+  const rendered = await offline.startRendering();
+  return rendered.getChannelData(0); // Float32Array mono @16k
+}
+
+// ---- Load Whisper model (cached after first run) ----
+async function ensureModel(modelKey) {
+  if (transcriber && loadedModelKey === modelKey) return transcriber;
+  transcriber = null;
+  setStatus(`Loading ${modelKey} … (first run downloads the model, then it is cached)`);
+  setProgress(0);
+  const device = hasWebGPU ? "webgpu" : "wasm";
+  const dtype = hasWebGPU ? "fp16" : "q8";
+  transcriber = await pipeline("automatic-speech-recognition", modelKey, {
+    device,
+    dtype,
+    progress_callback: (p) => {
+      if (p.status === "progress" && p.total) {
+        setProgress((p.loaded / p.total) * 100);
+        setStatus(`Downloading model: ${p.file?.split("/").pop() || ""} ${(p.progress || 0).toFixed(0)}%`);
+      } else if (p.status === "ready") {
+        setStatus("Model ready.");
+      }
+    },
+  });
+  loadedModelKey = modelKey;
+  setProgress(null);
+  return transcriber;
+}
+
+function asrOptions() {
+  const lang = $("lang").value;
+  const task = $("task").value;
+  const opts = { chunk_length_s: 30, stride_length_s: 5, return_timestamps: true };
+  if (lang !== "auto") opts.language = lang;
+  opts.task = task;
+  return opts;
+}
+
+// ======================================================================
+//  UPLOAD PATH — transcribe a whole file at once (unchanged from v0)
+// ======================================================================
+runBtn.addEventListener("click", async () => {
+  if (!selectedFile) return;
+  runBtn.disabled = true;
+  outCard.classList.add("hide");
+  const started = performance.now();
+  try {
+    const modelKey = $("model").value;
+    const asr = await ensureModel(modelKey);
+
+    setStatus("Decoding audio…");
+    const audio = await fileToAudio(selectedFile);
+    audioSeconds = audio.length / RATE;
+
+    setStatus(`Transcribing ~${audioSeconds.toFixed(0)}s of audio… (this can take a while on CPU)`);
+    setProgress(null);
+
+    const result = await asr(audio, asrOptions());
+    chunks = result.chunks || [];
+    transcriptEl.value = (result.text || "").trim();
+
+    isLiveSession = false;
+    currentId = "s" + Date.now();
+    titleEl.value = defaultTitle();
+    resetSummaryTag();
+    renderResult();
+    persistCurrent();
+
+    const took = ((performance.now() - started) / 1000).toFixed(1);
+    elapsedEl.textContent = `Done in ${took}s · ${audioSeconds.toFixed(0)}s audio`;
+    outHeading.textContent = "Result";
+    outCard.classList.remove("hide");
+    setStatus("Transcription complete.", "ok");
+  } catch (err) {
+    console.error(err);
+    setStatus("Error: " + (err?.message || err) + " — try a smaller model, a shorter clip, or a different browser (Chrome/Edge recommended).", "err");
+    setProgress(null);
+  } finally {
+    runBtn.disabled = false;
+  }
+});
+
+// ======================================================================
+//  LIVE PATH — capture tab/mic audio and transcribe in ~20s windows
+// ======================================================================
+const liveBtn = $("liveBtn"), liveTime = $("liveTime");
+let capturing = false;
+let captureCtx = null;       // AudioContext @16k
+let processorNode = null;    // ScriptProcessorNode collecting samples
+let liveStreams = [];        // MediaStreams to stop on teardown
+let liveNodes = [];          // Web Audio nodes to disconnect on teardown
+let buf = null;              // Float32Array ring of un-transcribed samples (from front)
+let bufLen = 0;
+let absOffset = 0;           // samples already transcribed+dropped (timestamp base)
+let totalSamples = 0;        // everything captured (for the duration stat)
+let processing = false;
+let stopping = false;
+let liveInterval = null, liveTimer = null, liveStartMs = 0;
+
+async function acquireStream(src) {
+  const out = [];
+  if (src === "mic" || src === "both") {
+    out.push(await navigator.mediaDevices.getUserMedia({ audio: true }));
+  }
+  if (src === "tab" || src === "both") {
+    if (!hasDisplayMedia) throw new Error("Tab/system-audio capture needs Chrome or Edge on desktop.");
+    // video:true is required by Chrome to expose the "share tab audio" option.
+    const disp = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true });
+    if (!disp.getAudioTracks().length) {
+      disp.getTracks().forEach(t => t.stop());
+      throw new Error("No audio was shared. Re-share and tick “Share tab audio” in the picker (works best on a browser tab).");
+    }
+    out.push(disp);
+  }
+  return out;
+}
+
+liveBtn.addEventListener("click", async () => {
+  if (capturing) { stopLive(); return; }
+  liveBtn.disabled = true;
+  try {
+    setStatus("Requesting audio…");
+    liveStreams = await acquireStream(liveSource);
+  } catch (err) {
+    setStatus("Could not start capture: " + (err?.message || err), "err");
+    liveBtn.disabled = false;
+    teardownStreams();
+    return;
+  }
+
+  // Start collecting audio immediately so nothing is lost while the model loads.
+  try {
+    startGraph(liveStreams);
+  } catch (err) {
+    setStatus("Audio setup failed: " + (err?.message || err), "err");
+    liveBtn.disabled = false;
+    teardownStreams();
+    return;
+  }
+
+  // Fresh live session.
+  isLiveSession = true;
+  capturing = true; stopping = false;
+  chunks = []; transcriptEl.value = "";
+  buf = new Float32Array(RATE * 30); bufLen = 0; absOffset = 0; totalSamples = 0;
+  currentId = "s" + Date.now();
+  titleEl.value = "Live meeting " + new Date().toLocaleString();
+  resetSummaryTag();
+  if (mediaUrl) { URL.revokeObjectURL(mediaUrl); mediaUrl = null; }
+  player.removeAttribute("src"); player.classList.add("hide");
+  segSearch.value = "";
+  outHeading.innerHTML = '<span class="live-flag">● LIVE</span> &nbsp;Transcript';
+  outCard.classList.remove("hide");
+  renderResultMeta(); renderSegments("");
+  outCard.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  liveBtn.textContent = "■ Stop capture";
+  liveBtn.classList.remove("btn-rec"); liveBtn.classList.add("btn-primary");
+  liveBtn.disabled = false;
+  liveStartMs = performance.now();
+  const tick = () => {
+    const s = Math.floor((performance.now() - liveStartMs) / 1000);
+    liveTime.innerHTML = `<span class="rec-dot"></span>${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
+  };
+  tick();
+  liveTimer = setInterval(tick, 250);
+
+  // Load the model in the background, then begin draining the buffer.
+  try {
+    setStatus("Loading model… capturing audio in the meantime.");
+    await ensureModel($("model").value);
+    setStatus("Listening… transcript builds every ~" + WINDOW_SEC + "s.", "ok");
+    liveInterval = setInterval(checkAndProcess, 1500);
+  } catch (err) {
+    console.error(err);
+    setStatus("Could not load the model: " + (err?.message || err), "err");
+    stopLive();
+  }
+});
+
+function startGraph(streams) {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  captureCtx = new AC({ sampleRate: RATE });
+  // ScriptProcessorNode is deprecated but universally available and ideal for a
+  // dependency-free single-file app. Multiple sources connected to it are summed (mixed).
+  processorNode = captureCtx.createScriptProcessor(4096, 1, 1);
+  for (const stream of streams) {
+    const node = captureCtx.createMediaStreamSource(stream);
+    node.connect(processorNode);
+    liveNodes.push(node);
+    // Auto-stop if the user ends the share from the browser's "stop sharing" bar.
+    stream.getTracks().forEach(t => t.addEventListener("ended", () => { if (capturing) stopLive(); }));
+  }
+  // A muted sink keeps the processor firing without echoing audio back to the user.
+  const sink = captureCtx.createGain();
+  sink.gain.value = 0;
+  processorNode.connect(sink);
+  sink.connect(captureCtx.destination);
+  liveNodes.push(sink);
+
+  processorNode.onaudioprocess = (e) => {
+    if (!capturing) return;
+    const input = e.inputBuffer.getChannelData(0);
+    pushSamples(input);
+    totalSamples += input.length;
+  };
+  if (captureCtx.state === "suspended") captureCtx.resume();
+}
+
+function pushSamples(arr) {
+  if (bufLen + arr.length > buf.length) {
+    const grown = new Float32Array(Math.max(buf.length * 2, bufLen + arr.length));
+    grown.set(buf.subarray(0, bufLen));
+    buf = grown;
+  }
+  buf.set(arr, bufLen);
+  bufLen += arr.length;
+}
+
+function checkAndProcess() {
+  if (!capturing || processing) return;
+  // If the CPU has fallen far behind, skip the oldest backlog so we stay near real time.
+  if (bufLen > MAX_BUFFER_SEC * RATE) {
+    const drop = bufLen - WINDOW; // keep one window of recent audio
+    buf.copyWithin(0, drop, bufLen); bufLen -= drop; absOffset += drop;
+    chunks.push({ timestamp: [absOffset / RATE, absOffset / RATE], text: "[… some audio skipped: CPU couldn't keep up. Try the Tiny model. …]" });
+    rebuildTranscript();
+  }
+  if (bufLen >= WINDOW) processOne(false);
+}
+
+async function processOne(force) {
+  if (processing) return;
+  if (!force && bufLen < WINDOW) return;
+  if (bufLen < RATE * 0.5) return; // < 0.5s left — nothing useful
+  processing = true;
+  const n = Math.min(bufLen, WINDOW);
+  const slice = buf.slice(0, n);                 // copy out before we shift the ring
+  const offsetSec = absOffset / RATE;
+  buf.copyWithin(0, n, bufLen); bufLen -= n; absOffset += n;
+  try {
+    const result = await transcriber(slice, asrOptions());
+    appendLive(result, offsetSec, n / RATE);
+  } catch (err) {
+    console.error("window transcription failed", err);
+  } finally {
+    processing = false;
+  }
+}
+
+function appendLive(result, offsetSec, winDur) {
+  let newChunks;
+  if (result.chunks && result.chunks.length) {
+    newChunks = result.chunks.map(c => {
+      const ts = c.timestamp || [0, null];
+      const start = (ts[0] || 0) + offsetSec;
+      const end = (ts[1] != null ? ts[1] : winDur) + offsetSec;
+      return { timestamp: [start, end], text: (c.text || "").trim() };
+    });
+  } else if (result.text && result.text.trim()) {
+    newChunks = [{ timestamp: [offsetSec, offsetSec + winDur], text: result.text.trim() }];
+  } else {
+    newChunks = [];
+  }
+  newChunks = newChunks.filter(c => c.text);
+  if (!newChunks.length) { audioSeconds = totalSamples / RATE; renderResultMeta(); return; }
+  chunks.push(...newChunks);
+  rebuildTranscript();
+  audioSeconds = totalSamples / RATE;
+  renderResultMeta();
+  renderSegments(segSearch.value);
+}
+
+function rebuildTranscript() {
+  transcriptEl.value = chunks.map(c => (c.text || "").trim()).filter(Boolean).join(" ");
+}
+
+async function stopLive() {
+  if (!capturing) return;
+  capturing = false; stopping = true;
+  if (liveInterval) { clearInterval(liveInterval); liveInterval = null; }
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+  liveTime.textContent = (liveTime.textContent || "").replace(/[^\d:]/g, "") || "00:00";
+  liveBtn.textContent = "● Start live capture";
+  liveBtn.classList.add("btn-rec"); liveBtn.classList.remove("btn-primary");
+  setStatus("Finishing the last few seconds…");
+
+  // Drain whatever audio is still buffered.
+  if (transcriber) {
+    let guard = 0;
+    while (bufLen >= WINDOW && guard++ < 1000) await processOne(false);
+    if (bufLen >= RATE * 0.6) await processOne(true);
+  }
+
+  teardownStreams();
+  if (captureCtx) { try { await captureCtx.close(); } catch {} captureCtx = null; }
+  processorNode = null;
+
+  outHeading.textContent = "Result";
+  audioSeconds = totalSamples / RATE;
+  renderResult();           // re-render with player hidden, final summary
+  persistCurrent();
+  elapsedEl.textContent = `Live capture · ${fmtClock(audioSeconds)} · ${(transcriptEl.value.match(/\S+/g) || []).length} words`;
+  setStatus(transcriptEl.value.trim() ? "Live capture complete — transcript saved to this device." : "Stopped. No speech was transcribed.", transcriptEl.value.trim() ? "ok" : "");
+}
+
+function teardownStreams() {
+  for (const node of liveNodes) { try { node.disconnect(); } catch {} }
+  liveNodes = [];
+  for (const stream of liveStreams) { try { stream.getTracks().forEach(t => t.stop()); } catch {} }
+  liveStreams = [];
+  if (processorNode) { try { processorNode.onaudioprocess = null; processorNode.disconnect(); } catch {} }
+}
+
+// ======================================================================
+//  RENDERING (shared by upload + live + restored sessions)
+// ======================================================================
+function renderResult() {
+  if (mediaUrl) { player.src = mediaUrl; player.classList.remove("hide"); }
+  else { player.removeAttribute("src"); player.classList.add("hide"); }
+  segSearch.value = "";
+  renderResultMeta();
+  renderSegments("");
+}
+
+function renderResultMeta() {
+  const text = transcriptEl.value;
+  const words = (text.match(/\S+/g) || []).length;
+  const mins = audioSeconds / 60;
+  const wpm = mins > 0 ? Math.round(words / mins) : 0;
+  statsEl.innerHTML = "";
+  const stats = [
+    ["Duration", fmtClock(audioSeconds)],
+    ["Words", words.toLocaleString()],
+    ["Pace", wpm + " wpm"],
+    ["Segments", String(chunks.length)],
+  ];
+  for (const [label, val] of stats) {
+    const d = document.createElement("div");
+    d.className = "stat";
+    d.innerHTML = `<b>${val}</b><span>${label}</span>`;
+    statsEl.appendChild(d);
+  }
+
+  // Extractive summary (always available, fully client-side).
+  if (!summaryIsAI) renderExtractiveSummary();
+
+  const ex = extractCues(chunks, text);
+  renderCueList(actionsList, actionsBox, ex.actions);
+  renderCueList(decisionsList, decisionsBox, ex.decisions);
+}
+
+function renderExtractiveSummary() {
+  const points = summarize(transcriptEl.value, 5);
+  if (points.length) {
+    summaryList.innerHTML = "";
+    for (const p of points) { const li = document.createElement("li"); li.textContent = p; summaryList.appendChild(li); }
+    summaryBox.classList.remove("hide");
+  } else {
+    summaryBox.classList.add("hide");
+  }
+}
+
+let summaryIsAI = false;
+function resetSummaryTag() {
+  summaryIsAI = false;
+  summaryTag.textContent = "extractive";
+  summaryTag.className = "tag tag-ext";
+  aiBtn.disabled = false;
+}
+
+function renderCueList(listEl, boxEl, items) {
+  listEl.innerHTML = "";
+  if (!items.length) { boxEl.classList.add("hide"); return; }
+  for (const it of items) {
+    const li = document.createElement("li");
+    const hasTime = it.time != null && isFinite(it.time);
+    if (hasTime) {
+      li.innerHTML = `<a class="cue" data-start="${it.time}" href="#" title="Jump to ${fmtClock(it.time)}">[${fmtClock(it.time)}]</a> ${escapeHtml(it.text)}`;
+      const a = li.querySelector(".cue");
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+        if (player.src) { player.currentTime = Number(a.dataset.start) || 0; player.play(); }
+      });
+    } else {
+      li.textContent = it.text;
+    }
+    listEl.appendChild(li);
+  }
+  boxEl.classList.remove("hide");
+}
+
+function renderSegments(query) {
+  segmentsEl.innerHTML = "";
+  const q = (query || "").trim();
+  const ql = q.toLowerCase();
+  let shown = 0;
+  if (chunks.length) {
+    chunks.forEach((c) => {
+      const txt = (c.text || "").trim();
+      if (ql && !txt.toLowerCase().includes(ql)) return;
+      const [start] = c.timestamp || [0];
+      const div = document.createElement("div");
+      div.className = "seg";
+      div.dataset.start = start || 0;
+      div.innerHTML = `<time>${fmtClock(start || 0)}</time><p>${q ? highlight(txt, q) : escapeHtml(txt)}</p>`;
+      div.addEventListener("click", () => { if (player.src) { player.currentTime = Number(div.dataset.start) || 0; player.play(); } });
+      segmentsEl.appendChild(div);
+      shown++;
+    });
+    segmentsEl.classList.remove("hide");
+  } else {
+    segmentsEl.classList.add("hide");
+  }
+  segCount.textContent = q ? `${shown} / ${chunks.length} segments` : "";
+}
+
+function highlight(text, q) {
+  const safe = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return escapeHtml(text).replace(new RegExp("(" + safe + ")", "ig"), "<mark>$1</mark>");
+}
+
+segSearch.addEventListener("input", () => renderSegments(segSearch.value));
+
+player.addEventListener("timeupdate", () => {
+  if (!chunks.length) return;
+  const t = player.currentTime;
+  let activeStart = null;
+  for (let i = 0; i < chunks.length; i++) {
+    const start = (chunks[i].timestamp || [0])[0] || 0;
+    const end = (chunks[i].timestamp || [0, 0])[1] || (chunks[i + 1]?.timestamp?.[0]) || start + 3;
+    if (t >= start && t < end) { activeStart = start; break; }
+  }
+  let active = null;
+  [...segmentsEl.children].forEach((el) => {
+    const on = activeStart != null && Number(el.dataset.start) === activeStart;
+    el.classList.toggle("active", on);
+    if (on) active = el;
+  });
+  if (active) active.scrollIntoView({ block: "nearest" });
+});
+
+// ======================================================================
+//  OPTIONAL: abstractive summary via a small in-browser LLM (beta)
+// ======================================================================
+let summarizer = null;
+async function ensureSummarizer() {
+  if (summarizer) return summarizer;
+  setStatus("Loading the summary model (first time downloads a few hundred MB, then cached)…");
+  setProgress(0);
+  const device = hasWebGPU ? "webgpu" : "wasm";
+  const dtype = hasWebGPU ? "fp32" : "q8";
+  summarizer = await pipeline("summarization", "Xenova/distilbart-cnn-6-6", {
+    device, dtype,
+    progress_callback: (p) => {
+      if (p.status === "progress" && p.total) {
+        setProgress((p.loaded / p.total) * 100);
+        setStatus(`Downloading summary model: ${p.file?.split("/").pop() || ""} ${(p.progress || 0).toFixed(0)}%`);
+      }
+    },
+  });
+  setProgress(null);
+  return summarizer;
+}
+
+function wordBlocks(text, maxWords) {
+  const words = (text || "").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  const blocks = [];
+  for (let i = 0; i < words.length; i += maxWords) blocks.push(words.slice(i, i + maxWords).join(" "));
+  return blocks;
+}
+
+aiBtn.addEventListener("click", async () => {
+  const text = transcriptEl.value.trim();
+  if (text.replace(/\s+/g, " ").split(" ").length < 40) {
+    setStatus("Not enough transcript yet for an AI summary.", "err");
+    return;
+  }
+  aiBtn.disabled = true;
+  const original = aiBtn.textContent;
+  aiBtn.textContent = "✨ Summarizing…";
+  try {
+    const sum = await ensureSummarizer();
+    setStatus("Generating AI summary…");
+    const blocks = wordBlocks(text, 650).slice(0, 8); // cap work for very long meetings
+    const bullets = [];
+    for (let i = 0; i < blocks.length; i++) {
+      setStatus(`Generating AI summary… (${i + 1}/${blocks.length})`);
+      const r = await sum(blocks[i], { max_new_tokens: 90, min_length: 12, do_sample: false });
+      const s = (r?.[0]?.summary_text || "").trim();
+      if (s) bullets.push(s);
+    }
+    if (!bullets.length) throw new Error("model returned no summary");
+    summaryList.innerHTML = "";
+    for (const b of bullets) { const li = document.createElement("li"); li.textContent = b; summaryList.appendChild(li); }
+    summaryBox.classList.remove("hide");
+    summaryIsAI = true;
+    summaryTag.textContent = "AI · distilbart";
+    summaryTag.className = "tag tag-ai";
+    setStatus("AI summary ready.", "ok");
+    if (currentId) persistCurrent();
+  } catch (err) {
+    console.error(err);
+    summarizer = null; // allow a retry
+    summaryIsAI = false;
+    renderExtractiveSummary();
+    setStatus("AI summary unavailable (" + (err?.message || err) + ") — showing the extractive summary instead.", "err");
+    setProgress(null);
+  } finally {
+    aiBtn.disabled = false;
+    aiBtn.textContent = original;
+  }
+});
+
+// ======================================================================
+//  Saved meetings (localStorage history)
+// ======================================================================
+const HKEY = "mt_history";
+function loadHistory() { try { return JSON.parse(localStorage.getItem(HKEY) || "[]"); } catch { return []; } }
+function saveHistory(list) { try { localStorage.setItem(HKEY, JSON.stringify(list)); return true; } catch (e) { return false; } }
+
+function defaultTitle() {
+  const n = selectedFile && selectedFile.name;
+  if (n && n !== "recording.webm") return n.replace(/\.[^.]+$/, "");
+  return "Meeting " + new Date().toLocaleString();
+}
+
+function persistCurrent() {
+  if (!currentId) return;
+  const list = loadHistory();
+  const rec = {
+    id: currentId,
+    title: titleEl.value.trim() || "Untitled meeting",
+    date: Date.now(),
+    text: transcriptEl.value,
+    chunks,
+    audioSeconds,
+    live: isLiveSession,
+  };
+  const idx = list.findIndex(s => s.id === currentId);
+  if (idx >= 0) list[idx] = rec; else list.unshift(rec);
+  if (!saveHistory(list.slice(0, 25))) {
+    while (list.length > 1 && !saveHistory(list.slice(0, list.length - 1))) list.pop();
+  }
+  renderHistory();
+}
+
+function renderHistory() {
+  const list = loadHistory();
+  if (!list.length) { histCard.classList.add("hide"); return; }
+  histCard.classList.remove("hide");
+  histList.innerHTML = "";
+  for (const s of list) {
+    const item = document.createElement("div");
+    item.className = "hist-item";
+    const when = new Date(s.date).toLocaleString();
+    const words = (s.text.match(/\S+/g) || []).length;
+    const openTag = s.id === currentId ? ' · <span style="color:var(--accent-2)">open</span>' : "";
+    const liveTag = s.live ? ' · 🔴 live' : "";
+    item.innerHTML = `<div class="hi-main">
+        <div class="hi-name">${escapeHtml(s.title)}${openTag}</div>
+        <div class="hi-meta">${when} · ${fmtClock(s.audioSeconds || 0)} · ${words} words${liveTag}</div>
+      </div>
+      <div class="hi-actions">
+        <button class="btn-ghost" data-open="${s.id}">Open</button>
+        <button class="btn-del" data-del="${s.id}">Delete</button>
+      </div>`;
+    histList.appendChild(item);
+  }
+  histList.querySelectorAll("[data-open]").forEach(b => b.addEventListener("click", () => openSession(b.dataset.open)));
+  histList.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () => deleteSession(b.dataset.del)));
+}
+
+function openSession(id) {
+  if (capturing) { setStatus("Stop the live capture first.", "err"); return; }
+  const s = loadHistory().find(x => x.id === id);
+  if (!s) return;
+  currentId = s.id;
+  chunks = s.chunks || [];
+  audioSeconds = s.audioSeconds || 0;
+  transcriptEl.value = s.text || "";
+  titleEl.value = s.title || "";
+  isLiveSession = !!s.live;
+  selectedFile = null;
+  if (mediaUrl) { URL.revokeObjectURL(mediaUrl); mediaUrl = null; }
+  player.removeAttribute("src"); player.classList.add("hide");
+  segSearch.value = "";
+  resetSummaryTag();
+  outHeading.textContent = "Result";
+  renderResultMeta();
+  renderSegments("");
+  elapsedEl.textContent = "Loaded from saved meetings · audio not stored";
+  outCard.classList.remove("hide");
+  setStatus("Loaded saved meeting.", "ok");
+  renderHistory();
+  outCard.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function deleteSession(id) {
+  saveHistory(loadHistory().filter(x => x.id !== id));
+  if (currentId === id) currentId = null;
+  renderHistory();
+}
+
+titleEl.addEventListener("change", persistCurrent);
+$("histClear").addEventListener("click", () => { saveHistory([]); currentId = null; renderHistory(); });
+
+// ======================================================================
+//  Extractive summary: score sentences by content-word frequency
+// ======================================================================
+const STOP = new Set(("a an the and or but if then else of to in on for with as at by from into about over after before "
+  + "is are was were be been being do does did have has had i you he she it we they me him her us them my your his its our "
+  + "their this that these those so not no yes just like really very can could should would will shall may might must "
+  + "uh um yeah ok okay right well gonna wanna kind sort thing things get got go going know think mean say said").split(/\s+/));
+function summarize(text, n) {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (clean.length < 200) return [];
+  const sentences = clean.match(/[^.!?]+[.!?]+/g) || [clean];
+  if (sentences.length <= n) return [];
+  const freq = {};
+  for (const w of clean.toLowerCase().match(/[a-zà-ÿ']+/g) || []) {
+    if (w.length < 3 || STOP.has(w)) continue;
+    freq[w] = (freq[w] || 0) + 1;
+  }
+  const scored = sentences.map((s, idx) => {
+    const ws = s.toLowerCase().match(/[a-zà-ÿ']+/g) || [];
+    if (ws.length < 4) return { idx, s: s.trim(), score: -1 };
+    let sc = 0;
+    for (const w of ws) sc += freq[w] || 0;
+    return { idx, s: s.trim(), score: sc / Math.sqrt(ws.length) };
+  });
+  return scored
+    .filter(x => x.score >= 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, n)
+    .sort((a, b) => a.idx - b.idx)
+    .map(x => x.s);
+}
+
+// ======================================================================
+//  Action items & decisions: cue-phrase detection (PT + EN)
+// ======================================================================
+const ACTION_CUES = [
+  /\b(i'?ll|we'?ll|we need to|we have to|you need to|let'?s|i will|we will|i'?m going to|we'?re going to|make sure|don'?t forget|follow up|action item|to-?do|assign(ed)? to|by (monday|tuesday|wednesday|thursday|friday|tomorrow|next week|eod|end of (day|week))|please (send|share|review|prepare|update|check))\b/i,
+  /\b(vou|vamos|preciso|precisamos|temos que|tem que|você precisa|fica(r|ou) de|ficou responsável|responsável por|não esquec|acompanhar|próximos? passos?|me envi[ae]|enviar|preparar|revisar|atualizar|até (segunda|terça|quarta|quinta|sexta|amanhã|semana que vem))\b/i,
+];
+const DECISION_CUES = [
+  /\b(we decided|it'?s decided|decision is|we agreed|agreed to|we'?ll go with|let'?s go with|we'?re going with|final decision|approved|sign(ed)? off|conclus(ion|ão))\b/i,
+  /\b(decidimos|ficou decidido|ficou acordado|acordamos|vamos seguir com|vamos com|decisão|aprovad[oa]|fechado(?: com)?|optamos por|concluímos)\b/i,
+];
+function sentencesWithTime(chunks, text) {
+  const out = [];
+  if (chunks && chunks.length) {
+    for (const c of chunks) {
+      const t = (c.timestamp || [null])[0];
+      const parts = (c.text || "").replace(/\s+/g, " ").match(/[^.!?]+[.!?]*/g) || [];
+      for (const p of parts) { const s = p.trim(); if (s.length >= 8) out.push({ time: t, text: s }); }
+    }
+  } else {
+    const clean = (text || "").replace(/\s+/g, " ").trim();
+    for (const p of clean.match(/[^.!?]+[.!?]*/g) || []) { const s = p.trim(); if (s.length >= 8) out.push({ time: null, text: s }); }
+  }
+  return out;
+}
+function extractCues(chunks, text) {
+  const sents = sentencesWithTime(chunks, text);
+  const actions = [], decisions = [], seen = new Set();
+  for (const s of sents) {
+    const key = s.text.toLowerCase();
+    if (seen.has(key)) continue;
+    const isDecision = DECISION_CUES.some(r => r.test(s.text));
+    const isAction = ACTION_CUES.some(r => r.test(s.text));
+    if (isDecision) { decisions.push(s); seen.add(key); }
+    else if (isAction) { actions.push(s); seen.add(key); }
+  }
+  return { actions: actions.slice(0, 12), decisions: decisions.slice(0, 12) };
+}
+
+function escapeHtml(s) { return s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+// ======================================================================
+//  Exports
+// ======================================================================
+$("copy").addEventListener("click", async () => {
+  await navigator.clipboard.writeText(transcriptEl.value);
+  setStatus("Copied to clipboard.", "ok");
+});
+function download(name, text, mime) {
+  const blob = new Blob([text], { type: (mime || "text/plain") + ";charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+$("dlTxt").addEventListener("click", () => download("transcript.txt", transcriptEl.value));
+$("dlSrt").addEventListener("click", () => download("transcript.srt", toSrt(chunks)));
+$("dlVtt").addEventListener("click", () => download("transcript.vtt", toVtt(chunks), "text/vtt"));
+$("dlMd").addEventListener("click", () => download("meeting-notes.md", toMarkdown(), "text/markdown"));
+
+function pad(n, l = 2) { return String(n).padStart(l, "0"); }
+function fmtClock(t) { const s = Math.floor(t) % 60, m = Math.floor(t / 60) % 60, h = Math.floor(t / 3600);
+  return h ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`; }
+function fmtTime(t, sep) {
+  const ms = Math.floor((t % 1) * 1000), s = Math.floor(t) % 60, m = Math.floor(t / 60) % 60, h = Math.floor(t / 3600);
+  return `${pad(h)}:${pad(m)}:${pad(s)}${sep}${pad(ms, 3)}`;
+}
+function toSrt(cks) {
+  if (!cks || !cks.length) return transcriptEl.value;
+  return cks.map((c, i) => {
+    const [start, end] = c.timestamp || [0, 0];
+    return `${i + 1}\n${fmtTime(start || 0, ",")} --> ${fmtTime(end || (start || 0) + 2, ",")}\n${(c.text || "").trim()}\n`;
+  }).join("\n");
+}
+function toVtt(cks) {
+  let out = "WEBVTT\n\n";
+  if (!cks || !cks.length) return out + transcriptEl.value;
+  out += cks.map((c) => {
+    const [start, end] = c.timestamp || [0, 0];
+    return `${fmtTime(start || 0, ".")} --> ${fmtTime(end || (start || 0) + 2, ".")}\n${(c.text || "").trim()}`;
+  }).join("\n\n");
+  return out;
+}
+function toMarkdown() {
+  let md = "# Meeting notes\n\n";
+  md += `_Duration ${fmtClock(audioSeconds)} · ${(transcriptEl.value.match(/\S+/g) || []).length} words · transcribed locally with Whisper${isLiveSession ? " (live capture)" : ""}_\n\n`;
+  const bullets = summaryIsAI
+    ? [...summaryList.querySelectorAll("li")].map(li => li.textContent.trim()).filter(Boolean)
+    : summarize(transcriptEl.value, 5);
+  if (bullets.length) { md += `## Summary${summaryIsAI ? " (AI)" : ""}\n\n` + bullets.map(p => `- ${p}`).join("\n") + "\n\n"; }
+  const ex = extractCues(chunks, transcriptEl.value);
+  const cueLine = (it) => `- ${it.time != null && isFinite(it.time) ? `[${fmtClock(it.time)}] ` : ""}${it.text}`;
+  if (ex.actions.length) { md += "## Action items\n\n" + ex.actions.map(cueLine).join("\n") + "\n\n"; }
+  if (ex.decisions.length) { md += "## Decisions\n\n" + ex.decisions.map(cueLine).join("\n") + "\n\n"; }
+  md += "## Transcript\n\n";
+  if (chunks.length) md += chunks.map(c => `**[${fmtClock((c.timestamp || [0])[0] || 0)}]** ${(c.text || "").trim()}`).join("\n\n");
+  else md += transcriptEl.value;
+  return md + "\n";
+}
+</script>
+</body>
+</html>
