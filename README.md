@@ -35,6 +35,21 @@ language/task selectors, search, clickable timeline, on-device history.
 
 - `index.html` — the entire app (HTML + CSS + ESM JS, no build step).
 - `200.html` — identical copy, for the surge SPA fallback.
+- `scripts/validate.sh` — the project's quality gate (see below).
+
+## Validate (CI-independent)
+
+The whole quality gate is one zero-dependency script — just `node` + `cmp`:
+
+```sh
+bash scripts/validate.sh
+```
+
+It (1) extracts the inline `<script type="module">` from `index.html` and runs
+`node --check` on it, and (2) asserts `200.html` is byte-identical to
+`index.html` (the surge SPA fallback invariant). CI runs this exact script, so
+**local == CI by construction** — and validation stays reproducible even when
+the GitHub-hosted runner is unavailable.
 
 ## Deploy (static, surge — same as v0)
 

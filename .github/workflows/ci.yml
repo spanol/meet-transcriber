@@ -26,24 +26,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Validate inline module JS (node --check)
-        run: |
-          node -e '
-            const fs = require("fs");
-            const html = fs.readFileSync("index.html", "utf8");
-            const re = /<script\b[^>]*type=["\x27]module["\x27][^>]*>([\s\S]*?)<\/script>/gi;
-            let m, i = 0;
-            while ((m = re.exec(html))) { fs.writeFileSync("._mod_" + i + ".mjs", m[1]); i++; }
-            if (i === 0) { console.error("No inline <script type=module> found in index.html"); process.exit(1); }
-            console.log("Extracted " + i + " inline module script(s)");
-          '
-          for f in ._mod_*.mjs; do echo "node --check $f"; node --check "$f"; done
-      - name: Surge SPA-fallback invariant (200.html == index.html)
-        run: |
-          if ! cmp -s index.html 200.html; then
-            echo "::error::200.html must be byte-identical to index.html (surge SPA fallback)"
-            exit 1
-          fi
+      # Single source of truth: the same script you can run locally with
+      # `bash scripts/validate.sh`. Keeps local == CI by construction, and
+      # means validation stays reproducible even when the hosted runner is
+      # unavailable.
+      - name: Validate (inline module node --check + surge SPA invariant)
+        run: bash scripts/validate.sh
 
   deploy:
     needs: validate
